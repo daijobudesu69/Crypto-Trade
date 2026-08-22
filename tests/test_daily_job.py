@@ -121,5 +121,42 @@ for f in os.listdir(wf_dir):
             bad.append(f)
 cek("tidak ada workflow memakai pull_request_target", not bad, str(bad))
 
+print("\n=== 8. Teks dinamis wajib di-escape sebelum masuk pesan HTML ===")
+# Pesan dikirim parse_mode=HTML. Satu '<' yang lolos membuat Telegram menolak
+# SELURUH pesan dengan 400 "can't parse entities" -- pesannya hilang tanpa jejak.
+# Paling berbahaya di pesan ERROR: nama tipe exception Python berbentuk
+# <class '...'>, jadi pemberitahuan kegagalan ikut gagal justru saat dibutuhkan.
+JAHAT = "<script>&\"'"
+TAG_SAH = ("<b>", "</b>", "<i>", "</i>")
+KASUS = {
+    "entry": lambda: notify.entry_message(dict(
+        TRADE, symbol=JAHAT, signal_date=JAHAT,
+        hold_warning_date=JAHAT, hold_force_exit_date=JAHAT)),
+    "alarm": lambda: notify.hold_alarm_message(dict(
+        TRADE, symbol=JAHAT, entry_date=JAHAT, days_held=13,
+        hold_force_exit_date=JAHAT)),
+    "heartbeat": lambda: notify.heartbeat_message({
+        "run_date": JAHAT, "run_time": JAHAT, "data_through": JAHAT,
+        "open_positions": [{"symbol": JAHAT, "days_held": 3, "entry_px": 1.0,
+                            "oco_take_profit": 2.0, "oco_stop_loss": 0.5}],
+        "n_signals": 0, "n_shadow_rows": 3,
+        "last_signal_date": JAHAT, "days_since_last_signal": 299}),
+    "error": lambda: notify.error_message("tarik data", "ValueError: <class 'x'> & <BTC>"),
+}
+for nama, fn in KASUS.items():
+    sisa = fn()
+    for t in TAG_SAH:
+        sisa = sisa.replace(t, "")
+    bocor = [c for c in ("<", ">") if c in sisa]
+    cek(f"pesan {nama}: nol tag liar", not bocor, str(bocor) if bocor else "bersih")
+
+print("\n=== 9. Jaring pengaman: kirim ulang sebagai teks polos ===")
+# Kalau suatu saat ada field baru yang lupa di-escape, pesan harus tetap sampai
+# tanpa huruf tebal -- lebih baik daripada tidak sampai sama sekali.
+polos = notify._strip_tags("<b>SINYAL</b> &amp; <i>tes</i> &lt;BTC&gt;")
+cek("tag dibuang", "<b>" not in polos and "<i>" not in polos, repr(polos))
+cek("entitas dikembalikan ke bentuk asli", "&" in polos and "<BTC>" in polos)
+cek("send() mencoba dua format", 'for parse_mode in ("HTML", None)' in inspect.getsource(notify.send))
+
 print("\n" + ("SEMUA TES JOB HARIAN LOLOS" if ok else "ADA TES YANG GAGAL"))
 raise SystemExit(0 if ok else 1)
