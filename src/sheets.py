@@ -59,12 +59,20 @@ def _client():
     return gspread.authorize(creds).open_by_key(sheet_id)
 
 
+# shadow_log tumbuh 3 baris/hari (BTC + ETH + SOL). Default gspread 1000 baris
+# habis dalam ~11 bulan, dan forward test ini dirancang berjalan bertahun-tahun.
+# Kegagalannya akan muncul jauh di kemudian hari, dalam bentuk baris yang diam-
+# diam tidak tertulis -- persis jenis kegagalan senyap yang paling mahal di sini.
+# 20.000 baris cukup untuk ~18 tahun dan tidak memakan kuota apa pun kalau kosong.
+INITIAL_ROWS = 20_000
+
+
 def _worksheet(book, title: str, header: list[str]):
     """Ambil worksheet, buat kalau belum ada, dan pastikan barisnya berjudul."""
     try:
         ws = book.worksheet(title)
     except Exception:
-        ws = book.add_worksheet(title=title, rows=1000, cols=max(len(header), 26))
+        ws = book.add_worksheet(title=title, rows=INITIAL_ROWS, cols=max(len(header), 26))
         ws.append_row(header, value_input_option="RAW")
         return ws
     if not ws.row_values(1):
