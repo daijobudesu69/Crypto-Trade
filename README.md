@@ -1,6 +1,6 @@
 # Crypto-Trade — forward test V1.4
 
-Sinyal harian BTC/ETH, **spot, long-only, tanpa leverage**. Tahap saat ini: **v1.4.1**.
+Sinyal harian BTC/ETH, **spot, long-only, tanpa leverage**. Tahap saat ini: **v1.4.2 selesai** — replay historis lolos, belum ada otomatisasi harian.
 
 > **Ini bukan nasihat keuangan dan bukan sistem yang terbukti menguntungkan.**
 > Grid robustness pre-registered (T8) **gagal**: hanya 16.7% sel bertahan, syaratnya 70%.
@@ -54,7 +54,9 @@ python tests/sanity_tests.py
 python tests/test_port_fidelity.py
 ```
 
-Tes kedua otomatis di-skip kalau data historis tidak ada — CSV masuk `.gitignore`, jadi repo publik ini tidak membawa data apa pun.
+Atau semuanya sekaligus: `python tests/run_all.py`.
+
+Tes yang butuh data historis otomatis di-skip kalau data historis tidak ada — CSV masuk `.gitignore`, jadi repo publik ini tidak membawa data apa pun.
 
 ## Keamanan (repo publik)
 
