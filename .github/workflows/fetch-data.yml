@@ -1,0 +1,43 @@
+name: Crypto V1.2 Data Acquisition
+
+on:
+  workflow_dispatch:
+    inputs:
+      universe_only:
+        description: "Run universe-only sanity check (no historical data pull)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests pandas
+
+      - name: Run acquisition script
+        run: |
+          if [ "${{ inputs.universe_only }}" = "true" ]; then
+            python crypto_v1_2_data_acquisition.py --universe-only --output-dir crypto-v1.2-data
+          else
+            python crypto_v1_2_data_acquisition.py --output-dir crypto-v1.2-data
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-v1.2-data
+          path: crypto-v1.2-data/
+          if-no-files-found: warn
