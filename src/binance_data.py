@@ -127,6 +127,32 @@ def fetch_klines(symbol: str, start: str, end: str,
     return df[OHLCV_COLS].astype(float)
 
 
+def current_open(symbol: str, session: requests.Session | None = None,
+                 now_ms: int | None = None) -> tuple[pd.Timestamp, float]:
+    """(tanggal, harga OPEN) dari lilin hari ini yang MASIH BERJALAN.
+
+    Ini satu-satunya tempat lilin belum-tutup boleh dibaca, dan hanya kolom
+    OPEN-nya. Sah, bukan lookahead: harga open sebuah lilin sudah final sejak
+    detik lilin itu dibuka — ia tidak berubah sepanjang hari, tidak seperti
+    high/low/close.
+
+    Dibutuhkan karena backtest mengeksekusi di `open hari t+1`. Saat job jalan
+    00:05 UTC, "t+1" adalah hari ini, lilinnya baru berumur 5 menit, dan
+    harganya belum ada di data lilin-tertutup.
+    """
+    session = session or requests.Session()
+    now_ms = now_ms if now_ms is not None else int(datetime.now(timezone.utc).timestamp() * 1000)
+    today = pd.Timestamp(now_ms, unit="ms", tz="UTC").normalize()
+    batch = _get(session, {"symbol": symbol, "interval": cfg.KLINE_INTERVAL,
+                           "startTime": int(today.timestamp() * 1000), "limit": 1})
+    if not batch:
+        raise RuntimeError(f"{symbol}: lilin hari ini ({today.date()}) belum tersedia")
+    got = pd.Timestamp(int(batch[0][0]), unit="ms", tz="UTC").normalize()
+    if got != today:
+        raise RuntimeError(f"{symbol}: diminta lilin {today.date()}, dapat {got.date()}")
+    return got, float(batch[0][1])
+
+
 def assert_contiguous(df: pd.DataFrame, symbol: str) -> None:
     """Lilin harian harus tanpa lubang. Lubang berarti data hilang, dan sistem
     harus berhenti keras — bukan diam-diam menghitung momentum yang melompati

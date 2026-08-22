@@ -1,6 +1,6 @@
 # Crypto-Trade — forward test V1.4
 
-Sinyal harian BTC/ETH, **spot, long-only, tanpa leverage**. Tahap saat ini: **v1.4.2 selesai** — replay historis lolos, belum ada otomatisasi harian.
+Sinyal harian BTC/ETH, **spot, long-only, tanpa leverage**. Tahap saat ini: **v1.4.3 (kode siap)** — menunggu kredensial dipasang sebelum cron dinyalakan.
 
 > **Ini bukan nasihat keuangan dan bukan sistem yang terbukti menguntungkan.**
 > Grid robustness pre-registered (T8) **gagal**: hanya 16.7% sel bertahan, syaratnya 70%.
@@ -40,9 +40,34 @@ Menambahkan salah satunya berarti mengulang pekerjaan yang sudah terbukti gagal.
 | `tests/test_port_fidelity.py` | Membuktikan kode yang diport mereproduksi 298 trade / mean R 0.3182 |
 | `tests/test_binance_data.py` | Lilin belum tutup, rentang tanggal, paginasi, lubang data |
 | `tests/test_replay_v142.py` | **Gerbang v1.4.2** — replay 2019-2026 lewat pipa produksi |
+| `src/shadow.py` | Kolom shadow §2.4 — dicatat, **tidak pernah** memblokir |
+| `src/notify.py` | Pesan Telegram: sinyal masuk (dengan harga OCO), alarm hari ke-13, heartbeat, error |
+| `src/sheets.py` | Shadow log ke Google Sheets |
+| `src/daily_job.py` | Orkestrator cron harian. **Tanpa state** — replay penuh tiap hari |
+| `tests/test_signal_equivalence.py` | Membuktikan seleksi sinyal live == engine, 2.784 hari |
+| `tests/test_daily_job.py` | Bentuk pesan, mode kering, pengaman kredensial |
 | `tests/run_all.py` | Jalankan semua tes + periksa gerbang |
 
 `features.py` dan `engine.py` **tidak boleh ditulis ulang** (`V1_4_SPEC.md` §2.2). Gerbang v1.4.2 mengharuskan pipa ini mereproduksi backtest persis; menulis ulang berarti menguji sistem yang berbeda.
+
+## Menyalakan (v1.4.3)
+
+Tanpa kredensial, semuanya jalan dalam **mode kering**: pesan Telegram dan baris Sheets dibentuk lengkap lalu dicetak ke layar, tidak dikirim ke mana pun.
+
+```bash
+DRY_RUN=1 PYTHONPATH=src python src/daily_job.py
+```
+
+Untuk menyalakan sungguhan, pasang empat secret di **Settings → Secrets and variables → Actions**:
+
+| Secret | Dari |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | @BotFather |
+| `TELEGRAM_CHAT_ID` | `api.telegram.org/bot<TOKEN>/getUpdates` setelah mengirim pesan ke bot |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | Isi **utuh** file JSON service account, bukan path-nya |
+| `SHEET_ID` | Bagian tengah URL spreadsheet |
+
+Dua hal yang paling sering tersendat: spreadsheet harus **di-share** ke email service account (`...@....iam.gserviceaccount.com`) sebagai Editor, dan **Google Sheets API harus di-enable** di project Google Cloud-nya. Membuat service account saja tidak cukup.
 
 ## Menjalankan tes
 
@@ -94,7 +119,7 @@ Forward test 90 hari menghasilkan ~11 trade. Untuk mendeteksi edge sebesar +0.15
 | v1.4.0 | Perbaikan V1.3, tes no-lookahead, T8 | ✅ Selesai (T8 gagal, dicatat) |
 | v1.4.1 | Repo, port, config | ✅ Selesai |
 | v1.4.2 | Replay 2019–2026, harus persis 298 trade | ✅ Selesai — lolos, identik bit-per-bit |
-| **v1.4.3** | **Cron harian, Sheets, Telegram, OCO + alarm hari ke-13** | **← berikutnya** |
+| **v1.4.3** | Cron harian, Sheets, Telegram, OCO + alarm hari ke-13 | **Kode siap** — menunggu 4 secret dipasang |
 | v1.4.4 | Shadow log 90 hari, **nol modal** | |
 | v1.4.5 | Modal mikro, eksekusi manual | |
 

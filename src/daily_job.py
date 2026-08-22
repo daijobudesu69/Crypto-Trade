@@ -1,0 +1,230 @@
+"""Job harian — dijalankan GitHub Actions cron 00:05 UTC (V1_4_SPEC.md §5).
+
+Alur: tarik data -> bangun panel -> replay penuh -> sinyal hari ini + alarm hold
+-> Telegram + Google Sheets -> catat eksekusi.
+
+--------------------------------------------------------------------------------
+KEPUTUSAN DESAIN TERPENTING: JOB INI TANPA STATE.
+
+Setiap hari sistem me-replay SELURUH riwayat sejak 2019-01-01, bukan menyimpan
+"posisi saya sekarang" di suatu tempat lalu memperbaruinya. Posisi terbuka hari
+ini dibaca dari hasil replay itu.
+
+Kenapa begitu:
+  * Gerbang v1.4.2 membuktikan replay = backtest, persis. Kalau job harian
+    memakai jalur lain (state tersimpan yang diperbarui bertahap), bukti itu
+    tidak berlaku untuk yang benar-benar jalan tiap hari.
+  * State tersimpan bisa melenceng diam-diam: satu job gagal, satu baris gagal
+    tulis, satu kali retry ganda — dan posisi tercatat jadi tidak cocok dengan
+    yang seharusnya, tanpa ada yang tahu.
+  * Replay penuh cuma ~10 detik dan datanya gratis. Tidak ada alasan menukar
+    kebenaran dengan kecepatan di sini.
+
+Konsekuensi yang harus diterima: posisi yang dilacak sistem adalah posisi
+SIMULASI, memakai harga model. Kalau eksekusi manual Dew meleset dari harga itu,
+shadow log tetap mencatat versi sistem. Itu memang yang diinginkan di v1.4.4 —
+yang diukur adalah apa yang SISTEM katakan, bukan apa yang Dew lakukan. Selisih
+antara keduanya baru diukur di v1.4.5.
+--------------------------------------------------------------------------------
+"""
+from __future__ import annotations
+import os
+import sys
+import traceback
+from datetime import datetime, timezone, timedelta
+
+import pandas as pd
+
+# Log job memuat emoji dan tanda kutip tipografis. Konsol Windows default cp1252
+# akan melempar UnicodeEncodeError dan MEMBUNUH job hanya karena mencetak. Runner
+# GitHub Actions memakai UTF-8, tapi pengembangan lokal tidak — dan job yang mati
+# saat logging adalah kegagalan paling konyol yang bisa terjadi.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import config_v14 as cfg
+import binance_data
+import notify
+import panel_v14
+import pipeline
+import shadow
+import sheets
+
+WARMUP_TAIL_DAYS = 5     # berapa hari ke belakang dianggap "baru saja" untuk sinyal
+
+
+def _fmt(d) -> str:
+    return pd.Timestamp(d).date().isoformat()
+
+
+def collect(now_utc: datetime | None = None, end: str | None = None) -> dict:
+    """Tarik data, replay, dan susun semua yang perlu dikirim hari ini."""
+    now_utc = now_utc or datetime.now(timezone.utc)
+    # Lilin kemarin adalah lilin terakhir yang sudah tutup saat job jalan 00:05 UTC.
+    # binance_data juga menyaring lewat close_time; ini sekadar batas atas permintaan.
+    end = end or _fmt(now_utc.date())
+
+    syms = tuple(cfg.UNIVERSE) + tuple(cfg.SHADOW_SYMBOLS)
+    raw = binance_data.load(syms, start=cfg.BACKTEST_START, end=end, verbose=True)
+    data_through = min(df.index.max() for df in raw.values())
+
+    panel = panel_v14.build(raw)
+    panel = shadow.add_shadow_columns(panel)
+    regime = panel_v14.empty_regime(panel)
+
+    c = cfg.production_engine_config()
+    c.end = _fmt(data_through)
+    import engine
+    trades = pipeline.with_execution_plan(engine.run(panel, regime, c))
+    signal_day = data_through
+
+    # --- posisi yang MASIH terbuka -----------------------------------------
+    # engine menutup paksa yang masih hidup di tanggal terakhir dan menandainya
+    # "eod". Di backtest itu artinya akhir jendela; di sini artinya masih terbuka.
+    open_pos, alarms, open_symbols = [], [], set()
+    for _, t in pipeline.still_open(trades).iterrows():
+        p = {"symbol": t["symbol"], "entry_date": _fmt(t["entry_date"]),
+             "entry_px": float(t["entry_px"]),
+             "oco_stop_loss": float(t["oco_stop_loss"]),
+             "oco_take_profit": float(t["oco_take_profit"]),
+             "days_held": int(t["days_held"]),
+             "hold_force_exit_date": _fmt(t["hold_force_exit_date"])}
+        open_pos.append(p)
+        open_symbols.add(t["symbol"])
+        if int(t["days_held"]) == cfg.TIME_EXIT_WARNING_DAY:
+            alarms.append(p)
+
+    # --- sinyal yang lahir di close hari terakhir -> dieksekusi HARI INI -----
+    # Tidak bisa dibaca dari trade log: engine butuh baris hari berikutnya untuk
+    # harga eksekusi, dan hari berikutnya itu HARI INI yang lilinnya baru dibuka.
+    # Harga entry diambil dari OPEN lilin berjalan — sah, karena open sebuah
+    # lilin sudah final sejak detik pertama. Kesetaraan seleksi dengan engine
+    # dijaga tests/test_signal_equivalence.py.
+    new_entries = []
+    slots = cfg.MAX_POSITIONS - len(open_symbols)
+    cand = pipeline.signals_for_day(panel, signal_day, open_symbols, slots,
+                                    require_entry_price=False)
+    for sym, row in cand.iterrows():
+        try:
+            day_open, entry_px = binance_data.current_open(f"{sym}{cfg.QUOTE_ASSET}")
+        except Exception as e:
+            raise RuntimeError(f"harga open hari ini untuk {sym} tidak terbaca: {e}") from None
+        atr = float(row["atr14"])
+        sl, tp = cfg.barriers(entry_px, atr)
+        wanted, used = cfg.position_size_frac(entry_px, atr)
+        entry_date = day_open
+        new_entries.append({
+            "symbol": sym, "signal_date": _fmt(signal_day),
+            "entry_date": _fmt(entry_date), "entry_px": entry_px,
+            "atr14": atr, "oco_stop_loss": sl, "oco_take_profit": tp,
+            "size_frac_wanted": wanted, "size_frac_used": used,
+            "size_frac": used / wanted,
+            "hold_warning_date": _fmt(entry_date + timedelta(days=cfg.TIME_EXIT_WARNING_DAY - 1)),
+            "hold_force_exit_date": _fmt(entry_date + timedelta(days=cfg.TIME_EXIT_DAY - 1)),
+        })
+
+    # --- shadow log: SETIAP kandidat, termasuk yang tidak jadi trade --------
+    shadow_rows = [r for s in syms
+                   if (r := shadow.row_for(panel, s, signal_day))]
+
+    last_sig = trades["signal_date"].max() if len(trades) else None
+    return {
+        "run_utc": now_utc,
+        "run_date": now_utc.strftime("%Y-%m-%d"),
+        "run_time": now_utc.strftime("%H:%M"),
+        "data_through": _fmt(data_through),
+        "new_entries": new_entries,
+        "open_positions": open_pos,
+        "alarms": alarms,
+        "shadow_rows": shadow_rows,
+        "n_signals": len(new_entries),
+        "n_shadow_rows": len(shadow_rows),
+        "last_signal_date": _fmt(last_sig) if last_sig is not None else None,
+        "days_since_last_signal": int((signal_day - last_sig).days) if last_sig is not None else None,
+        "trades": trades,
+    }
+
+
+def dispatch(state: dict) -> list[str]:
+    """Kirim semua pesan + tulis Sheets. Kembalikan daftar kegagalan."""
+    problems = []
+
+    for e in state["new_entries"]:
+        if not notify.send(notify.entry_message(e)):
+            problems.append(f"gagal kirim sinyal masuk {e['symbol']}")
+
+    for a in state["alarms"]:
+        if not notify.send(notify.hold_alarm_message(a)):
+            problems.append(f"gagal kirim alarm hold {a['symbol']}")
+
+    try:
+        sheets.append_shadow(state["shadow_rows"])
+    except Exception as e:
+        problems.append(f"gagal tulis shadow_log: {type(e).__name__}: {e}")
+
+    # Heartbeat dikirim TERAKHIR supaya ia melaporkan hasil sebenarnya, bukan
+    # niat. Kalau ada yang gagal di atas, itu ikut kelihatan di pesan error.
+    if not notify.send(notify.heartbeat_message(state)):
+        problems.append("gagal kirim heartbeat")
+
+    try:
+        sheets.append_run(status="ok" if not problems else "partial",
+                          data_through=state["data_through"],
+                          n_signals=state["n_signals"],
+                          n_open=len(state["open_positions"]),
+                          n_shadow=state["n_shadow_rows"],
+                          n_alarms=len(state["alarms"]),
+                          note="; ".join(problems)[:400])
+    except Exception as e:
+        problems.append(f"gagal tulis runs: {type(e).__name__}: {e}")
+
+    return problems
+
+
+def main() -> int:
+    kering = notify.is_dry_run() or sheets.is_dry_run()
+    print(f"=== Job harian {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC"
+          f"{'  [MODE KERING]' if kering else ''} ===")
+    if kering:
+        print("  Telegram kering:", notify.is_dry_run(), "| Sheets kering:", sheets.is_dry_run())
+
+    try:
+        state = collect()
+    except Exception as e:
+        # Kegagalan tarik/hitung berarti sinyal hari ini tidak bisa dipercaya.
+        # Wajib berisik: diam adalah mode gagal yang paling berbahaya di sini.
+        print(traceback.format_exc())
+        notify.send(notify.error_message("tarik data / replay", f"{type(e).__name__}: {e}"))
+        try:
+            sheets.append_run("error", "-", 0, 0, 0, 0, f"{type(e).__name__}: {e}")
+        except Exception:
+            pass
+        return 1
+
+    print(f"\n  data s/d          : {state['data_through']}")
+    print(f"  sinyal masuk baru : {state['n_signals']}")
+    print(f"  posisi terbuka    : {len(state['open_positions'])}")
+    print(f"  alarm hari ke-13  : {len(state['alarms'])}")
+    print(f"  baris shadow log  : {state['n_shadow_rows']}")
+    if state["days_since_last_signal"] is not None:
+        print(f"  sinyal terakhir   : {state['last_signal_date']} "
+              f"({state['days_since_last_signal']} hari lalu)")
+    print()
+
+    problems = dispatch(state)
+    if problems:
+        print("\n  MASALAH:")
+        for p in problems:
+            print("   -", p)
+        notify.send(notify.error_message("pengiriman", "; ".join(problems)))
+        return 1
+    print("\n  Job selesai tanpa masalah.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

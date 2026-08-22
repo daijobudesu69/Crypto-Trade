@@ -1,0 +1,72 @@
+# Job sinyal harian — V1_4_SPEC.md §5 v1.4.3
+#
+# KEAMANAN (§6.1 aturan 1): trigger di bawah HANYA `schedule` dan
+# `workflow_dispatch`. JANGAN PERNAH menambahkan `pull_request_target` — itu
+# satu-satunya trigger yang menyerahkan secret kepada kode dari fork, dan repo
+# ini publik. `pull_request` biasa aman karena fork tidak menerima secret.
+name: Sinyal harian
+
+on:
+  schedule:
+    # 00:05 UTC. Lilin harian tutup 00:00 UTC; jeda 5 menit memberi Binance waktu
+    # menyelesaikan lilinnya. Cron GitHub bisa telat beberapa menit saat sibuk —
+    # itu tidak masalah, karena harga eksekusi adalah OPEN hari ini yang sudah
+    # final sejak 00:00 dan tidak berubah sepanjang hari.
+    - cron: "5 0 * * *"
+  workflow_dispatch:
+
+# Hak paling minim: job ini tidak menulis apa pun ke repo.
+permissions:
+  contents: read
+
+# Jangan sampai dua run bertumpuk dan mengirim sinyal ganda.
+concurrency:
+  group: daily-signal
+  cancel-in-progress: false
+
+jobs:
+  signal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Pasang dependensi
+        run: pip install -r requirements.txt
+
+      - name: Periksa keutuhan konfigurasi
+        # config_v14.validate() jalan saat import. Kalau ada konstanta produksi
+        # yang melenceng, berhenti DI SINI — sebelum satu pesan pun terkirim.
+        run: python -c "import sys; sys.path.insert(0,'src'); import config_v14; print('config v'+config_v14.VERSION+' sah, frozen '+config_v14.CONFIG_FROZEN_DATE)"
+
+      - name: Jalankan job harian
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          PYTHONPATH: src
+        run: python src/daily_job.py
+
+      - name: Kabari kalau job mati total
+        # daily_job.py sudah mengirim pesan errornya sendiri untuk kegagalan yang
+        # bisa ia tangkap. Langkah ini menangkap yang TIDAK bisa: python gagal
+        # start, dependensi gagal pasang, runner kehabisan waktu. Tanpa ini,
+        # kegagalan seperti itu terlihat persis seperti hari tanpa sinyal.
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            curl -sS -X POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d "chat_id=${TELEGRAM_CHAT_ID}" \
+              -d "text=🔴 JOB MATI TOTAL — workflow gagal sebelum job sempat melapor. Run: ${GITHUB_RUN_ID}. Sinyal hari ini TIDAK ADA dan TIDAK dapat dipercaya." \
+              > /dev/null
+          fi
