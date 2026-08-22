@@ -58,24 +58,36 @@ def _ms(ts: str | pd.Timestamp) -> int:
 
 
 def _get(session: requests.Session, params: dict) -> list:
-    """GET dengan backoff. 429/5xx ditunggu; error lain langsung dilempar."""
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            r = session.get(cfg.BINANCE_KLINES_URL, params=params, timeout=REQUEST_TIMEOUT)
-        except requests.RequestException:
-            if attempt == MAX_RETRIES:
-                raise
-            time.sleep(2 * attempt)
-            continue
-        if r.status_code == 200:
-            return r.json()
-        if r.status_code in (429, 418) or r.status_code >= 500:
-            if attempt == MAX_RETRIES:
-                r.raise_for_status()
-            time.sleep(2 * attempt)
-            continue
-        r.raise_for_status()
-    raise RuntimeError("tidak tercapai")
+    """GET dengan backoff, mencoba tiap host berurutan.
+
+    Perbedaan penanganan yang disengaja:
+      * Gagal JARINGAN (timeout, DNS, connection refused) -> host itu dianggap
+        tidak terjangkau, lanjut ke host berikutnya. Inilah bentuk geo-blocking
+        Binance: bukan HTTP 403, melainkan koneksi yang menggantung sampai
+        timeout.
+      * Gagal HTTP dengan respons sah (400 simbol salah, dsb) -> LANGSUNG
+        dilempar tanpa mencoba host lain. Permintaan yang salah akan sama
+        salahnya di host mana pun; mencoba ulang cuma menyembunyikan bug.
+      * 429/418/5xx -> ditunggu lalu diulang di host yang sama.
+    """
+    kegagalan = []
+    for host in cfg.BINANCE_KLINES_HOSTS:
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                r = session.get(host, params=params, timeout=REQUEST_TIMEOUT)
+            except requests.RequestException as e:
+                kegagalan.append(f"{host.split('/')[2]}: {type(e).__name__}")
+                break                      # host tak terjangkau -> host berikutnya
+            if r.status_code == 200:
+                return r.json()
+            if r.status_code in (429, 418) or r.status_code >= 500:
+                if attempt == MAX_RETRIES:
+                    kegagalan.append(f"{host.split('/')[2]}: HTTP {r.status_code}")
+                    break
+                time.sleep(2 * attempt)
+                continue
+            r.raise_for_status()           # permintaan salah: jangan pura-pura pulih
+    raise RuntimeError("semua host data Binance gagal -> " + "; ".join(kegagalan))
 
 
 def fetch_klines(symbol: str, start: str, end: str,

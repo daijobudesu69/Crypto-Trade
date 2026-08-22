@@ -131,8 +131,28 @@ BACKTEST_START = "2019-01-01"
 BACKTEST_END = "2026-08-16"
 OOS_START = "2024-01-01"             # jendela "ujian jujur"
 KLINE_INTERVAL = "1d"                # daily close 00:00 UTC
-BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
 CRON_UTC = "00:05"                   # §5 v1.4.3
+
+# Host data pasar, dicoba berurutan. Endpoint yang sama persis di semuanya
+# (/api/v3/klines), publik, tanpa API key.
+#
+# data-api.binance.vision DIDAHULUKAN, bukan api.binance.com. Alasannya bukan
+# selera: api.binance.com melakukan geo-blocking, dan runner GitHub Actions
+# berada di Amerika Serikat. Kalau job produksi memakai api.binance.com, ia akan
+# gagal SETIAP HARI dengan connection timeout -- dan gagalnya berupa timeout 20
+# detik, bukan pesan "diblokir", jadi penyebabnya tidak akan kelihatan.
+# data-api.binance.vision adalah endpoint data-publik resmi Binance yang memang
+# disediakan tanpa pembatasan wilayah.
+#
+# Terbukti di mesin pengembangan 22 Agt 2026: api.binance.com ConnectTimeout,
+# data-api.binance.vision HTTP 200. Kesetaraan datanya dijaga gerbang v1.4.2 --
+# replay harus tetap menghasilkan 298 trade dan mean R 0.3182.
+BINANCE_KLINES_HOSTS: tuple[str, ...] = (
+    "https://data-api.binance.vision/api/v3/klines",
+    "https://api.binance.com/api/v3/klines",
+    "https://api-gcp.binance.com/api/v3/klines",
+)
+BINANCE_KLINES_URL = BINANCE_KLINES_HOSTS[0]     # kompatibilitas mundur
 
 
 # ============================================ angka acuan gerbang v1.4.2 =====
