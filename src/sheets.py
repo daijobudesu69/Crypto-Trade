@@ -42,12 +42,64 @@ def is_dry_run() -> bool:
     return not (sa and sheet_id)
 
 
+def check_sheet_id(sheet_id: str) -> str | None:
+    """Kesalahan format SHEET_ID yang bisa dideteksi sebelum memanggil API.
+
+    Google membalas kesalahan ini dengan HALAMAN HTML, bukan pesan error yang
+    berguna — jadi lebih baik ditangkap di sini.
+    """
+    if not sheet_id:
+        return "SHEET_ID kosong"
+    s = sheet_id.strip()
+    if s != sheet_id:
+        return "SHEET_ID punya spasi/baris baru di ujung — salin ulang tanpa spasi"
+    if s.startswith("http"):
+        return ("SHEET_ID berisi URL lengkap. Ambil HANYA bagian di antara "
+                "'/d/' dan '/edit', misal 1AbCdEf...XyZ")
+    if "/" in s:
+        return "SHEET_ID mengandung '/' — itu potongan URL, bukan ID-nya"
+    if len(s) < 30:
+        return f"SHEET_ID cuma {len(s)} karakter; ID Google Sheets biasanya ~44"
+    return None
+
+
+def _diagnose(err: Exception, sheet_id: str) -> str:
+    """Terjemahkan kegagalan gspread jadi sebab dan tindakan yang jelas.
+
+    Google sering membalas dengan halaman HTML lengkap saat spreadsheet tidak
+    bisa dibuka. Menyalin halaman itu ke log dan ke pesan Telegram membuat
+    penyebab sebenarnya tenggelam di ribuan karakter CSS.
+    """
+    t = str(err)
+    html_page = "<!DOCTYPE html" in t or "<html" in t
+    if html_page or "unable to open the file" in t or "Page Not Found" in t:
+        return ("Google membalas halaman 'tidak bisa membuka file'. Dua sebab, "
+                "urut dari yang paling sering:\n"
+                "  1. Spreadsheet BELUM di-share ke email service account "
+                "(client_email di file JSON) sebagai Editor\n"
+                "  2. SHEET_ID salah — harus bagian antara '/d/' dan '/edit', "
+                "bukan URL lengkap")
+    if "has not been used in project" in t or "SERVICE_DISABLED" in t:
+        return ("Google Sheets API belum di-enable di project Google Cloud yang "
+                "memiliki service account ini.")
+    if "PERMISSION_DENIED" in t or "403" in t:
+        return ("Service account tidak punya izin tulis. Share spreadsheet "
+                "sebagai EDITOR, bukan Viewer.")
+    if "invalid_grant" in t or "JWT" in t:
+        return ("Kredensial service account ditolak. Kemungkinan key sudah "
+                "di-revoke, atau isi JSON kepotong saat ditempel.")
+    return t[:300]
+
+
 def _client():
     """Buka spreadsheet. Diimpor malas — lihat docstring modul."""
     import gspread
     from google.oauth2.service_account import Credentials
 
     sa_raw, sheet_id = credentials()
+    salah = check_sheet_id(sheet_id or "")
+    if salah:
+        raise RuntimeError(salah)
     try:
         info = json.loads(sa_raw)
     except json.JSONDecodeError as e:
@@ -55,8 +107,16 @@ def _client():
         raise RuntimeError(
             "GOOGLE_SERVICE_ACCOUNT_JSON bukan JSON yang sah. Tempelkan ISI file "
             f"JSON-nya secara utuh, bukan path-nya. ({e.msg})") from None
+    email = info.get("client_email", "(client_email tidak ada di JSON)")
     creds = Credentials.from_service_account_info(info, scopes=SCOPES)
-    return gspread.authorize(creds).open_by_key(sheet_id)
+    try:
+        return gspread.authorize(creds).open_by_key(sheet_id)
+    except Exception as e:
+        raise RuntimeError(
+            f"tidak bisa membuka spreadsheet.\n{_diagnose(e, sheet_id)}\n"
+            f"  Email yang harus di-share: {email}\n"
+            f"  SHEET_ID dipakai: {sheet_id[:8]}...{sheet_id[-4:]} "
+            f"({len(sheet_id)} karakter)") from None
 
 
 # shadow_log tumbuh 3 baris/hari (BTC + ETH + SOL). Default gspread 1000 baris
