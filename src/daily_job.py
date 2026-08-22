@@ -185,7 +185,37 @@ def dispatch(state: dict) -> list[str]:
     return problems
 
 
+def assert_not_silently_dry() -> None:
+    """Di CI, kredensial yang hilang WAJIB menggagalkan job.
+
+    Tanpa ini ada mode gagal yang sangat berbahaya: cron jalan tanpa secret ->
+    notify/sheets diam-diam masuk mode kering -> pesan cuma tercetak ke log ->
+    job keluar dengan kode 0 -> centang hijau di GitHub.
+
+    Akibatnya gerbang v1.4.3 ("7 hari berturut tanpa kegagalan job") bisa LULUS
+    selama seminggu penuh sementara nol pesan pernah terkirim dan nol baris
+    pernah masuk Sheets. Hijau palsu itu lebih buruk daripada merah jujur.
+
+    DRY_RUN=1 tetap dihormati -- itu permintaan eksplisit, bukan kelalaian.
+    """
+    if os.environ.get("DRY_RUN", "").strip() not in ("", "0", "false", "False"):
+        return
+    if os.environ.get("GITHUB_ACTIONS", "").lower() != "true":
+        return
+    hilang = [n for n, v in (
+        ("TELEGRAM_BOT_TOKEN", os.environ.get("TELEGRAM_BOT_TOKEN")),
+        ("TELEGRAM_CHAT_ID", os.environ.get("TELEGRAM_CHAT_ID")),
+        ("GOOGLE_SERVICE_ACCOUNT_JSON", os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")),
+        ("SHEET_ID", os.environ.get("SHEET_ID"))) if not v]
+    if hilang:
+        raise SystemExit(
+            "GAGAL: berjalan di GitHub Actions tanpa secret " + ", ".join(hilang) + ".\n"
+            "Job akan diam-diam masuk mode kering dan melapor sukses tanpa mengirim\n"
+            "apa pun. Pasang secret-nya, atau set DRY_RUN=1 kalau memang disengaja.")
+
+
 def main() -> int:
+    assert_not_silently_dry()
     kering = notify.is_dry_run() or sheets.is_dry_run()
     print(f"=== Job harian {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC"
           f"{'  [MODE KERING]' if kering else ''} ===")
