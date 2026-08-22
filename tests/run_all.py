@@ -1,6 +1,7 @@
 """Jalankan semua tes + gerbang v1.4.1 (V1_4_SPEC.md sec 5).
 
-Gerbang: semua konstanta hard-coded, NOL TODO, dan sec 6.1 dipenuhi.
+Gerbang v1.4.1: semua konstanta hard-coded, NOL TODO, sec 6.1 dipenuhi.
+Gerbang v1.4.2: replay 2019-2026 -> 298 trade persis, mean R 0.3182.
 """
 from __future__ import annotations
 import os, re, subprocess, sys
@@ -15,7 +16,8 @@ def bab(t): print(f"\n{'='*70}\n{t}\n{'='*70}")
 
 bab("1. Tes unit")
 env = dict(os.environ, PYTHONPATH=SRC)
-for t in ("sanity_tests.py", "test_port_fidelity.py"):
+for t in ("sanity_tests.py", "test_port_fidelity.py", "test_binance_data.py",
+          "test_replay_v142.py"):
     r = subprocess.run([sys.executable, os.path.join(ROOT, "tests", t)],
                        capture_output=True, text=True, env=env, cwd=os.path.join(ROOT, "tests"))
     tail = [l for l in r.stdout.strip().splitlines() if l.strip()][-1:]

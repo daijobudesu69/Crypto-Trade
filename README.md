@@ -35,7 +35,12 @@ Menambahkan salah satunya berarti mengulang pekerjaan yang sudah terbukti gagal.
 | `src/engine.py` | Event loop backtest. **Diport byte-identical** dari V1.3 |
 | `src/panel_v14.py` | Kolom yang di V1.3 lahir di orkestrator riset (`mom_120`, gate universe, `next_open`) |
 | `tests/sanity_tests.py` | 18 tes: 13 engine, 4 kausalitas fitur, 1 integritas config |
+| `src/binance_data.py` | Ambil lilin harian, endpoint publik tanpa API key. Membuang lilin yang belum tutup |
+| `src/pipeline.py` | Jalur produksi: data -> panel -> trade. Satu-satunya tempat sinyal lahir |
 | `tests/test_port_fidelity.py` | Membuktikan kode yang diport mereproduksi 298 trade / mean R 0.3182 |
+| `tests/test_binance_data.py` | Lilin belum tutup, rentang tanggal, paginasi, lubang data |
+| `tests/test_replay_v142.py` | **Gerbang v1.4.2** — replay 2019-2026 lewat pipa produksi |
+| `tests/run_all.py` | Jalankan semua tes + periksa gerbang |
 
 `features.py` dan `engine.py` **tidak boleh ditulis ulang** (`V1_4_SPEC.md` §2.2). Gerbang v1.4.2 mengharuskan pipa ini mereproduksi backtest persis; menulis ulang berarti menguji sistem yang berbeda.
 
@@ -72,6 +77,7 @@ Strateginya sendiri terbuka dan memang tidak apa-apa: time-series momentum sudah
 | **Ekspektasi forward** | **mean R +0.151** (era 2024–26), **bukan** +0.3182 |
 | Frekuensi | 3.82 trade/bulan; **48.5% hari tanpa posisi** |
 | Jeda terpanjang tanpa sinyal | **299 hari** — itu **bukan** kerusakan |
+| **Sinyal terakhir di data** | **26 Okt 2025** — sistem sudah sepi **294 hari** per 16 Agt 2026 |
 | Kriteria pre-registered | Lolos 3 dari 4. **Gagal** kriteria return ≥ BTC buy-and-hold |
 | Grid robustness T8 | **GAGAL — 16.7%**, syarat ≥70% |
 
@@ -84,9 +90,9 @@ Forward test 90 hari menghasilkan ~11 trade. Untuk mendeteksi edge sebesar +0.15
 | Versi | Isi | Status |
 |---|---|---|
 | v1.4.0 | Perbaikan V1.3, tes no-lookahead, T8 | ✅ Selesai (T8 gagal, dicatat) |
-| **v1.4.1** | **Repo, port, config** | **← sekarang** |
-| v1.4.2 | Replay 2019–2026, harus persis 298 trade | Berikutnya |
-| v1.4.3 | Cron harian, Binance fetch, Sheets, Telegram, OCO + alarm hari ke-13 | |
+| v1.4.1 | Repo, port, config | ✅ Selesai |
+| v1.4.2 | Replay 2019–2026, harus persis 298 trade | ✅ Selesai — lolos, identik bit-per-bit |
+| **v1.4.3** | **Cron harian, Sheets, Telegram, OCO + alarm hari ke-13** | **← berikutnya** |
 | v1.4.4 | Shadow log 90 hari, **nol modal** | |
 | v1.4.5 | Modal mikro, eksekusi manual | |
 
