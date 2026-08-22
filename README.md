@@ -123,4 +123,11 @@ Forward test 90 hari menghasilkan ~11 trade. Untuk mendeteksi edge sebesar +0.15
 | v1.4.4 | Shadow log 90 hari, **nol modal** | |
 | v1.4.5 | Modal mikro, eksekusi manual | |
 
-Spesifikasi lengkap: `V1_4_SPEC.md` (di luar repo).
+## Dokumen
+
+| Berkas | Isi |
+|---|---|
+| [`docs/V1_4_BUILD_LOG.md`](docs/V1_4_BUILD_LOG.md) | **Catatan pembangunan v1.4.0-v1.4.3** — hasil T8, revisi spec, 9 bug yang ditemukan dan cara masing-masing ketemu |
+| `V1_4_SPEC.md` | Spesifikasi produksi (di luar repo) |
+| `results/KOREKSI_V1_3.md` | Dua cacat implementasi V1.3 (di luar repo) |
+| `results/V1_4_0_RESULTS.md` | Hasil lengkap v1.4.0 (di luar repo) |
