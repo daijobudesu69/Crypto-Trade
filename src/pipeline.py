@@ -85,6 +85,46 @@ def signals_for_day(panel: pd.DataFrame, day: pd.Timestamp, open_symbols,
     return elig.sort_values(cfg.RANK_COL, ascending=cfg.RANK_ASCENDING).head(n_slots)
 
 
+def apply_exposure_cap(trades: pd.DataFrame) -> pd.DataFrame:
+    """Potong ukuran posisi supaya total eksposur tidak pernah lewat 100% ekuitas.
+
+    KENAPA WAJIB: ukuran posisi = 3% risk / jarak SL. Jarak SL median cuma 7%,
+    jadi SATU posisi saja median 42% ekuitas dan bisa sampai 100%. Kalau BTC dan
+    ETH sama-sama memberi sinyal di hari yang sama, penjumlahannya rutin lewat
+    100% — pada 22 Agt 2026 hasilnya 73.8% + 56.9% = 130.7%.
+
+    Di spot tanpa leverage itu MUSTAHIL. Tanpa fungsi ini, pesan Telegram
+    menyuruh Dew membeli lebih banyak daripada uang yang ada, dan dia terpaksa
+    berimprovisasi — padahal seluruh proyek ini bersandar pada eksekusi yang
+    deterministik dan bisa dibandingkan dengan backtest.
+
+    Aturan §2.6, apa adanya: "Ketika ekuitas bebas tidak cukup untuk ukuran
+    penuh, ambil sisa yang ada; jangan lewati sinyal, jangan naikkan risk."
+
+    Dialokasikan kronologis menurut entry_date, persis seperti simulasi §2.6.
+    Kolom `size_frac` (dipakai ÷ diinginkan) adalah diagnostik yang diminta
+    §2.6: kalau jauh lebih sering < 1 daripada ~14%, ada bug pelacakan ekuitas.
+    """
+    if trades.empty:
+        return trades
+    t = trades.sort_values(["entry_date", "symbol"]).copy()
+    terbuka: list[tuple[pd.Timestamp, int, float]] = []      # (exit_date, idx, ukuran)
+    dipakai, frac = {}, {}
+    for idx, row in t.iterrows():
+        d = row["entry_date"]
+        terbuka = [p for p in terbuka if p[0] > d]           # lepaskan yang sudah exit
+        bebas = max(cfg.MAX_EXPOSURE_FRAC - sum(p[2] for p in terbuka), 0.0)
+        ingin = row["size_frac_wanted"]
+        ambil = min(ingin, bebas)
+        dipakai[idx] = ambil
+        frac[idx] = (ambil / ingin) if ingin > 0 else 1.0
+        terbuka.append((row["exit_date"], idx, ambil))
+    t["size_frac_used"] = pd.Series(dipakai)
+    t["size_frac"] = pd.Series(frac)
+    t["notional_usd_at_start"] = t["size_frac_used"] * cfg.ACCOUNT_START_USD
+    return t.reindex(trades.index)
+
+
 def with_execution_plan(trades: pd.DataFrame) -> pd.DataFrame:
     """Tambahkan kolom yang dibutuhkan manusia untuk mengeksekusi manual:
     harga SL/TP, ukuran posisi, dan tanggal alarm hold (§2.8).
@@ -102,9 +142,9 @@ def with_execution_plan(trades: pd.DataFrame) -> pd.DataFrame:
     t["oco_take_profit"] = t["entry_px"] + cfg.TP_ATR_MULT * atr
     sizes = [cfg.position_size_frac(e, a) for e, a in zip(t["entry_px"], atr)]
     t["size_frac_wanted"] = [w for w, _ in sizes]
-    t["size_frac_used"] = [u for _, u in sizes]
-    t["size_frac"] = t["size_frac_used"] / t["size_frac_wanted"]     # diagnostik §2.6
-    t["notional_usd_at_start"] = t["size_frac_used"] * cfg.ACCOUNT_START_USD
     t["hold_warning_date"] = t["entry_date"] + pd.Timedelta(days=cfg.TIME_EXIT_WARNING_DAY - 1)
     t["hold_force_exit_date"] = t["entry_date"] + pd.Timedelta(days=cfg.TIME_EXIT_DAY - 1)
-    return t
+    # Cap portofolio, bukan cap per posisi. cfg.position_size_frac() hanya
+    # membatasi SATU posisi di 100%; yang membuat total dua posisi lewat 100%
+    # justru penjumlahannya. Lihat apply_exposure_cap().
+    return apply_exposure_cap(t)

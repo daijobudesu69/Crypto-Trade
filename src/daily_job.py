@@ -108,6 +108,11 @@ def collect(now_utc: datetime | None = None, end: str | None = None) -> dict:
     slots = cfg.MAX_POSITIONS - len(open_symbols)
     cand = pipeline.signals_for_day(panel, signal_day, open_symbols, slots,
                                     require_entry_price=False)
+    # Ekuitas yang sudah terpakai posisi terbuka. Sisanya dibagi ke kandidat baru
+    # menurut urutan peringkat. Tanpa ini, dua sinyal serentak menghasilkan total
+    # eksposur > 100% -- mustahil di spot tanpa leverage, dan memaksa Dew
+    # berimprovisasi (lihat pipeline.apply_exposure_cap).
+    bebas = max(cfg.MAX_EXPOSURE_FRAC - sum(p["size_frac_used"] for p in open_pos), 0.0)
     for sym, row in cand.iterrows():
         try:
             day_open, entry_px = binance_data.current_open(f"{sym}{cfg.QUOTE_ASSET}")
@@ -115,14 +120,16 @@ def collect(now_utc: datetime | None = None, end: str | None = None) -> dict:
             raise RuntimeError(f"harga open hari ini untuk {sym} tidak terbaca: {e}") from None
         atr = float(row["atr14"])
         sl, tp = cfg.barriers(entry_px, atr)
-        wanted, used = cfg.position_size_frac(entry_px, atr)
+        wanted, _ = cfg.position_size_frac(entry_px, atr)
+        used = min(wanted, bebas)          # §2.6: ambil sisa yang ada, jangan naikkan risk
+        bebas = max(bebas - used, 0.0)
         entry_date = day_open
         new_entries.append({
             "symbol": sym, "signal_date": _fmt(signal_day),
             "entry_date": _fmt(entry_date), "entry_px": entry_px,
             "atr14": atr, "oco_stop_loss": sl, "oco_take_profit": tp,
             "size_frac_wanted": wanted, "size_frac_used": used,
-            "size_frac": used / wanted,
+            "size_frac": (used / wanted) if wanted > 0 else 1.0,
             "hold_warning_date": _fmt(entry_date + timedelta(days=cfg.TIME_EXIT_WARNING_DAY - 1)),
             "hold_force_exit_date": _fmt(entry_date + timedelta(days=cfg.TIME_EXIT_DAY - 1)),
         })

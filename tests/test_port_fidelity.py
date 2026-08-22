@@ -19,6 +19,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 import config_v14 as cfg
+import pipeline
 import engine
 import panel_v14
 
@@ -79,6 +80,30 @@ def main() -> int:
     assert abs(tp - t0["entry_px"] - 2 * (t0["entry_px"] - sl)) < 1e-9, "TP:SL harus 2:1"
     assert 0 < used <= cfg.MAX_EXPOSURE_FRAC
     print(f"  barrier/sizing konsisten (contoh: ukuran diinginkan {wanted:.1%}, dipakai {used:.1%})")
+
+    # --- cap eksposur portofolio (§2.6) ------------------------------------
+    # Ukuran = 3% risk / jarak SL. Jarak SL median cuma ~7%, jadi SATU posisi
+    # median 42% ekuitas. Dua sinyal serentak rutin menjumlah lewat 100% --
+    # 22 Agt 2026 menghasilkan 73.8% + 56.9% = 130.7%, mustahil di spot.
+    plan = pipeline.with_execution_plan(trades)
+    ev = []
+    for _, r in plan.iterrows():
+        ev.append((r["entry_date"], r["size_frac_used"]))
+        ev.append((r["exit_date"], -r["size_frac_used"]))
+    expo = (pd.Series([v for _, v in ev], index=[d for d, _ in ev])
+              .groupby(level=0).sum().sort_index().cumsum())
+    puncak = expo.max()
+    dipotong = int((plan["size_frac"] < 1 - 1e-9).sum())
+    print(f"  eksposur puncak 2019-2026: {puncak:.1%} (cap {cfg.MAX_EXPOSURE_FRAC:.0%})")
+    print(f"  trade dipotong cap       : {dipotong}/{len(plan)} = {dipotong/len(plan):.1%} "
+          f"(acuan SPEC 2.6: 43/298 = 14.4%)")
+    if puncak > cfg.MAX_EXPOSURE_FRAC + 1e-9:
+        print(f"  GAGAL: cap eksposur bocor di {puncak:.1%}"); ok = False
+    if not 0.10 <= dipotong / len(plan) <= 0.20:
+        print(f"  GAGAL: porsi trade dipotong {dipotong/len(plan):.1%} jauh dari acuan ~14%; "
+              f"SPEC 2.6 menyebut ini pertanda bug pelacakan ekuitas"); ok = False
+    if (plan["size_frac_used"] < 0).any():
+        print("  GAGAL: ada ukuran posisi negatif"); ok = False
 
     print("\n  PORT SETIA" if ok else "\n  PORT RUSAK")
     return 0 if ok else 1
