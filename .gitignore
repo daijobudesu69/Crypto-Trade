@@ -1,0 +1,49 @@
+# ============================================================================
+# REPO INI PUBLIK. Aturan V1_4_SPEC.md §6.1 baris 2 — berkas ini WAJIB ada dan
+# lengkap SEBELUM commit pertama.
+#
+# Service-account JSON Google dan bot token Telegram adalah kredensial penuh.
+# Sekali ter-commit ke repo publik harus dianggap BOCOR SELAMANYA — riwayat git
+# tetap menyimpannya walau filenya dihapus di commit berikutnya.
+# ============================================================================
+
+# --- kredensial (§6.1 baris 2) ---
+*.json
+*.env
+.env*
+credentials*
+token*
+*.pem
+*.key
+service_account*
+client_secret*
+
+# --- data & artefak (§6.1 baris 2) ---
+*.pkl
+*.csv
+*.parquet
+
+# --- yang mengungkap posisi terbuka & ukurannya (§6.1 baris 3) ---
+# ID spreadsheet, chat ID Telegram, dan isi shadow log tidak boleh masuk repo.
+secrets.py
+local_settings.py
+shadow_log*
+*.sqlite
+*.db
+
+# --- python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+
+# --- editor / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
