@@ -19,7 +19,8 @@ def bab(t): print(f"\n{'='*70}\n{t}\n{'='*70}")
 bab("1. Tes unit")
 env = dict(os.environ, PYTHONPATH=SRC)
 for t in ("sanity_tests.py", "test_port_fidelity.py", "test_binance_data.py",
-          "test_signal_equivalence.py", "test_daily_job.py", "test_replay_v142.py"):
+          "test_signal_equivalence.py", "test_daily_job.py", "test_collect.py",
+          "test_replay_v142.py"):
     r = subprocess.run([sys.executable, os.path.join(ROOT, "tests", t)],
                        capture_output=True, text=True, env=env, cwd=os.path.join(ROOT, "tests"))
     tail = [l for l in r.stdout.strip().splitlines() if l.strip()][-1:]

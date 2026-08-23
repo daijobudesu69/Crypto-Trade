@@ -61,15 +61,26 @@ def _fmt(d) -> str:
     return pd.Timestamp(d).date().isoformat()
 
 
-def collect(now_utc: datetime | None = None, end: str | None = None) -> dict:
-    """Tarik data, replay, dan susun semua yang perlu dikirim hari ini."""
+def collect(now_utc: datetime | None = None, end: str | None = None,
+            raw: dict | None = None, entry_price_fn=None) -> dict:
+    """Tarik data, replay, dan susun semua yang perlu dikirim hari ini.
+
+    `raw` dan `entry_price_fn` bisa disuntik untuk pengujian. Bukan kemewahan:
+    selama fungsi ini hanya bisa jalan dengan menembak jaringan, ia tidak pernah
+    ikut diuji — dan itulah yang meloloskan KeyError 'size_frac_used' ke cron
+    produksi pertama. Bug-nya hanya muncul pada hari yang punya posisi terbuka,
+    karena sum() atas daftar kosong tidak pernah menyentuh kunci yang hilang.
+    """
     now_utc = now_utc or datetime.now(timezone.utc)
     # Lilin kemarin adalah lilin terakhir yang sudah tutup saat job jalan 00:05 UTC.
     # binance_data juga menyaring lewat close_time; ini sekadar batas atas permintaan.
     end = end or _fmt(now_utc.date())
+    entry_price_fn = entry_price_fn or binance_data.current_open
 
     syms = tuple(cfg.UNIVERSE) + tuple(cfg.SHADOW_SYMBOLS)
-    raw = binance_data.load(syms, start=cfg.BACKTEST_START, end=end, verbose=True)
+    if raw is None:
+        raw = binance_data.load(syms, start=cfg.BACKTEST_START, end=end, verbose=True)
+    syms = tuple(s for s in syms if s in raw)
     data_through = min(df.index.max() for df in raw.values())
 
     panel = panel_v14.build(raw)
@@ -92,6 +103,12 @@ def collect(now_utc: datetime | None = None, end: str | None = None) -> dict:
              "oco_stop_loss": float(t["oco_stop_loss"]),
              "oco_take_profit": float(t["oco_take_profit"]),
              "days_held": int(t["days_held"]),
+             # size_frac_used WAJIB ikut: ekuitas yang sudah dipakai posisi ini
+             # dikurangkan dari jatah kandidat baru di bawah. Tanpa kunci ini,
+             # job GAGAL dengan KeyError -- tapi hanya pada hari yang punya
+             # posisi terbuka, karena sum() atas daftar kosong tidak error.
+             "size_frac_used": float(t["size_frac_used"]),
+             "size_frac": float(t["size_frac"]),
              "hold_force_exit_date": _fmt(t["hold_force_exit_date"])}
         open_pos.append(p)
         open_symbols.add(t["symbol"])
@@ -115,7 +132,7 @@ def collect(now_utc: datetime | None = None, end: str | None = None) -> dict:
     bebas = max(cfg.MAX_EXPOSURE_FRAC - sum(p["size_frac_used"] for p in open_pos), 0.0)
     for sym, row in cand.iterrows():
         try:
-            day_open, entry_px = binance_data.current_open(f"{sym}{cfg.QUOTE_ASSET}")
+            day_open, entry_px = entry_price_fn(f"{sym}{cfg.QUOTE_ASSET}")
         except Exception as e:
             raise RuntimeError(f"harga open hari ini untuk {sym} tidak terbaca: {e}") from None
         atr = float(row["atr14"])
